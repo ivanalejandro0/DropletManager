@@ -4,7 +4,7 @@
 import os
 import logging
 
-import skiff
+import digitalocean
 
 
 def create_logger():
@@ -35,7 +35,7 @@ class DropletManager(object):
         If there is no token or is not a valid one this will raise KeyError.
         """
         # TODO: check for valid token?
-        self._skiff = skiff.rig(token)
+        self._manager = digitalocean.Manager(token=token)
 
         if logger is None:
             create_logger()
@@ -48,10 +48,30 @@ class DropletManager(object):
 
         :rtype: list
         """
-        images = self._skiff.Image.all()
+        images = self._manager.get_my_images()
         private_images = filter(lambda i: not i.public, images)
 
         return private_images
+
+    def _get_droplet(self, name):
+        droplet = None
+
+        for d in self._manager.get_all_droplets():
+            if d.name == name:
+                droplet = d
+                break
+
+        return droplet
+
+    def _get_image(self, name):
+        image = None
+
+        for i in self._manager.get_all_images():
+            if i.name == name:
+                image = i
+                break
+
+        return image
 
     def backup(self, droplet_name, snapshot_name=None):
         """
@@ -67,34 +87,29 @@ class DropletManager(object):
         if snapshot_name is None:
             snapshot_name = droplet_name + '_snapshot'
 
-        droplet = self._skiff.Droplet.get(droplet_name)
+        droplet = self._get_droplet(droplet_name)
 
-        if not droplet:
+        if droplet is None:
             logger.error('There is no such droplet.')
             return
 
-        snapshots = self._get_snapshots()
+        snapshot = self._get_image(snapshot_name)
 
-        try:
-            thesnapshot = next((s for s in snapshots if s.name == snapshot_name))
-            thesnapshot.delete()
+        if snapshot is not None:
+            snapshot.destroy()  # TODO: check if this method exists
             logger.debug('Previous snapshot destroyed.')
-        except:
-            # TODO: specify the exception to catch here when there's no
-            # snapshot do destroy.
-            pass  # There is no image to destroy
 
         try:
             droplet.shutdown()
             logger.debug('Shutting down droplet.')
-            droplet.wait_till_done()
+            droplet.wait_till_done()  # This may not exist on 'python-digitalocean'
             logger.debug('Droplet powered off.')
         except:
             pass  # already powered off
 
-        droplet.snapshot(snapshot_name)
+        droplet.take_snapshot(snapshot_name)
         logger.debug('Creating snapshot.')
-        droplet.wait_till_done()
+        droplet.wait_till_done()  # This may not exist on 'python-digitalocean'
         logger.debug('Snapshot created.')
 
     def restore(self, droplet_name, snapshot_name=None):
@@ -111,19 +126,23 @@ class DropletManager(object):
         if snapshot_name is None:
             snapshot_name = droplet_name + '_snapshot'
 
-        snapshots = self._get_snapshots()
+        snapshot = self._get_image(snapshot_name)
+
+        if snapshot is None:
+            raise Exception("No existing snapshots found with the given name.")
 
         # NOTE: this assumes that we hay just one key and/or we want to use the
         # first one
-        keys = self._skiff.Key.all()
+        keys = self._manager.get_all_sshkeys()
         key = keys[0]
 
-        try:
-            thesnapshot = next((s for s in snapshots if s.name == snapshot_name))
-        except StopIteration:
-            logger.warning('Using default snapshot')
-            thesnapshot = snapshots[0]
-            # Q: do we use the first one no matter which one it is?
+        # TODO: test this code
+        droplet = digitalocean.Droplet(token=self._token,
+                                       name=droplet_name,
+                                       region='nyc3',
+                                       image=snapshot_name,
+                                       size_slug='512mb')
+        droplet.create()
 
         droplet = self._skiff.Droplet.create(name=droplet_name,
                                              region='nyc3',
@@ -132,7 +151,7 @@ class DropletManager(object):
                                              ssh_keys=[key])
 
         # wait until droplet is created
-        droplet.wait_till_done()
+        droplet.wait_till_done()  # This may not exist on 'python-digitalocean'
         # refresh network information
         droplet = droplet.refresh()
         droplet = droplet.reload()
@@ -146,17 +165,15 @@ class DropletManager(object):
         :param droplet_name: the name of the droplet to backup.
         :type droplet_name: str
         """
-        droplet = self._skiff.Droplet.get(droplet_name)
+        droplet = self._get_droplet(droplet_name)
         droplet.destroy()
-        droplet.wait_till_done()
+        droplet.wait_till_done()  # This may not exist on 'python-digitalocean'
 
     def test(self):
         droplet_name = 'coreos-01'
-        print self._skiff.Key.all()
-        print self._skiff.Image.all()
-        print self._get_snapshots()
-        droplet = self._skiff.Droplet.get(droplet_name)
-        ip = droplet.v4[0].ip_address
+        print self._manager.get_all_sshkeys()
+        print self._manager.get_my_images()
+        ip = self._get_droplet(droplet_name).ip_address
         logger.debug("Droplet 'coreos-01' ip: {0}".format(ip))
 
 
@@ -180,7 +197,7 @@ def main():
 
     create_logger()
     dm = DropletManager(token)
-    dm.test()
+    # dm.test()
     # dm.backup('coreos-01')
     # dm.destroy('workstation')
 
