@@ -1,0 +1,8 @@
+skiff
+
+# NOTE: to avoid requests warnings for ssl see
+# http://stackoverflow.com/a/29099439/687989
+# for python < 2.7.9:
+pyOpenSSL
+ndg-httpsclient
+pyasn1
